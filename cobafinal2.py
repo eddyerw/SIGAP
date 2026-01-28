@@ -319,6 +319,15 @@ elif menu == "📡 Lapor Kondisi":
             tinggi = st.slider("Tinggi Air (cm)", 0, 300, 50)
             keb = st.multiselect("Kebutuhan Mendesak", ["Evakuasi", "Logistik", "Medis"])
 
+            if st.form_submit_button("Kirim Laporan & Notifikasi WA"):
+                df_l = load_laporan()
+                stat = "Bahaya" if tinggi > 150 else "Waspada"
+                new_l = pd.DataFrame([{'Waktu': datetime.now().strftime("%H:%M"), 'Kecamatan': kec, 'Level Air (cm)': tinggi, 'Status': stat, 'Kebutuhan': ", ".join(keb)}])
+                pd.concat([df_l, new_l], ignore_index=True).to_csv(NAMA_FILE_LAPORAN, index=False)
+            
+                kirim_wa(kec, tinggi, ", ".join(keb))
+                st.success("✅ Laporan Terkirim & Notifikasi WA Terkirim!")
+
             # ✅ UPLOAD FOTO — INDENT HARUS SEJAJAR INPUT LAIN
             foto_path = None
             foto = st.file_uploader(
@@ -340,11 +349,9 @@ elif menu == "📡 Lapor Kondisi":
                     caption="Preview Foto Lokasi",
                     use_container_width=True
                 )
-
-            # ✅ TOMBOL SUBMIT PALING BAWAH
+  # ✅ TOMBOL SUBMIT PALING BAWAH
             if st.form_submit_button("Kirim Laporan"):
                 st.success("Form terkirim")
-
 # --- MENU 4: LOGISTIK (PASTIKAN STRUKTUR INI BENAR) ---
 elif menu == "📦 Logistik":
     st.title("📦 Manajemen Bantuan")
@@ -429,3 +436,4 @@ elif menu == "📈 Analisis":
     else:
         # Tampilan jika file CSV kosong atau tidak ditemukan
         st.warning("⚠️ Database warga masih kosong. Silakan isi data di menu 'Input Data KK' terlebih dahulu.")
+
