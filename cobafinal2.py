@@ -16,7 +16,7 @@ def kirim_notifikasi_wa(kecamatan, tinggi, kebutuhan):
 
     pesan = (
         f"🚨 *LAPORAN BANJIR BARU*\n\n"
-        f"📍 *Lokasi:* Kec. {kecamatan}\n"
+        f"📍 *Lokasi:* Kec. {kec}\n"
         f"📏 *Ketinggian Air:* {tinggi} cm\n"
         f"🆘 *Kebutuhan:* {kebutuhan}\n\n"
         f"Mohon segera tindak lanjuti melalui Dashboard Waspada Banjar."
@@ -103,7 +103,7 @@ def kirim_wa(kec, tinggi, keb):
     target = "08125064087"
     pesan = (
         f"🚨 *LAPORAN BANJIR BARU*\n\n"
-        f"📍 *Lokasi:* Kec. {kecamatan}\n"
+        f"📍 *Lokasi:* Kec. {kec}\n"
         f"📏 *Ketinggian Air:* {tinggi} cm\n"
         f"🆘 *Kebutuhan:* {kebutuhan}\n\n"
         f"Mohon segera tindak lanjuti melalui Dashboard Waspada Banjar."
@@ -329,4 +329,5 @@ elif menu == "📈 Analisis":
 
     else:
         # Tampilan jika file CSV kosong atau tidak ditemukan
+
         st.warning("⚠️ Database warga masih kosong. Silakan isi data di menu 'Input Data KK' terlebih dahulu.")
