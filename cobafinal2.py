@@ -8,6 +8,21 @@ from reportlab.lib.styles import getSampleStyleSheet
 import io
 import requests
 
+def get_weather_data(city_name="Martapura"):
+    api_key = "a89f4bc4d2e3f0d0a3e204161b289c5c" 
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name}&appid={api_key}&units=metric&lang=id"
+    
+    try:
+        response = requests.get(url).json()
+        data = {
+            "temp": response['main']['temp'],
+            "desc": response['weather'][0]['description'],
+            "rain": response.get('rain', {}).get('1h', 0) # Curah hujan dalam mm
+        }
+        return data
+    except Exception:
+        return None
+
 # --- FUNGSI KIRIM WHATSAPP (Fonnte API) ---
 def kirim_notifikasi_wa(kecamatan, tinggi, kebutuhan):
     url = "https://api.fonnte.com/send"
@@ -16,7 +31,7 @@ def kirim_notifikasi_wa(kecamatan, tinggi, kebutuhan):
 
     pesan = (
         f"🚨 *LAPORAN BANJIR BARU*\n\n"
-        f"📍 *Lokasi:* Kec. {kec}\n"
+        f"📍 *Lokasi:* Kec. {kecamatan}\n"
         f"📏 *Ketinggian Air:* {tinggi} cm\n"
         f"🆘 *Kebutuhan:* {keb}\n\n"
         f"Mohon segera tindak lanjuti melalui Dashboard Waspada Banjar."
@@ -173,26 +188,71 @@ with st.sidebar:
     st.info("Penyimpanan: **Lokal (CSV)** Aktif")
 
 # --- MENU 1: DASHBOARD ---
+# --- MENU 1: DASHBOARD ---
 if menu == "📊 Dashboard":
-    st.title("📊 Ringkasan Situasi Terkini")
+    st.title("📊 Dashboard Situasi Banjir Kabupaten Banjar")
+
     df_kk = load_data()
     df_lap = load_laporan()
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("KK Terdampak", f"{len(df_kk)}", "Keluarga")
-    col2.metric("Total Jiwa", f"{df_kk['Jumlah Anggota'].sum() if not df_kk.empty else 0}", "Orang")
-    col3.metric("Level Air Maks", f"{df_lap['Level Air (cm)'].max() if not df_lap.empty else 0} cm")
-    col4.metric("Status Wilayah", "Waspada")
+    # ===== METRIK UTAMA =====
+    st.subheader("📌 Ringkasan Cepat")
+    m1, m2, m3, m4 = st.columns(4)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("📍 Sebaran Kecamatan")
-        if not df_kk.empty:
-            st.bar_chart(df_kk['Kecamatan'].value_counts())
-    with c2:
-        st.subheader("🏠 Kondisi Rumah")
-        if not df_kk.empty:
-            st.write(df_kk['Status Rumah'].value_counts())
+    total_kk = len(df_kk)
+    total_jiwa = df_kk['Jumlah Anggota'].sum() if not df_kk.empty else 0
+    max_air = df_lap['Level Air (cm)'].max() if not df_lap.empty else 0
+
+    status_wilayah = (
+        "🔴 Bahaya" if max_air > 150 else
+        "🟠 Waspada" if max_air > 50 else
+        "🟢 Aman"
+    )
+
+    m1.metric("KK Terdampak", total_kk)
+    m2.metric("Total Jiwa", int(total_jiwa))
+    m3.metric("Level Air Tertinggi", f"{max_air} cm")
+    m4.metric("Status Wilayah", status_wilayah)
+
+    st.divider()
+
+    # ===== WIDGET CUACA =====
+    st.subheader("🌦️ Kondisi Cuaca Terkini")
+
+    weather = get_weather_data()
+
+    if weather:
+        w1, w2, w3 = st.columns(3)
+
+        w1.metric("🌡️ Suhu", f"{weather['temp']} °C")
+        w2.metric("☁️ Cuaca", weather['desc'].capitalize())
+        w3.metric("🌧️ Hujan", f"{weather['rain']} mm/jam")
+
+    else:
+        st.info("Data cuaca tidak tersedia saat ini.")
+    # ===== AUTO WARNING SYSTEM =====
+    st.subheader("🚨 Peringatan Dini Otomatis")
+
+    warning_list = []
+
+    # RULE 1: Tinggi Air
+    if max_air > 150:
+        warning_list.append("🔴 Tinggi air kritis (>150 cm)")
+
+    # RULE 2: Curah Hujan
+    if weather and weather['rain'] > 10:
+        warning_list.append("🌧️ Curah hujan tinggi (>10 mm/jam)")
+
+    # RULE 3: Kombinasi
+    if weather and weather['rain'] > 10 and max_air > 100:
+        warning_list.append("⚠️ Risiko banjir meluas dalam beberapa jam ke depan")
+
+    if warning_list:
+        for w in warning_list:
+            st.error(w)
+    else:
+        st.success("🟢 Tidak ada peringatan kritis saat ini")
+
 
 # --- MENU 2: INPUT DATA KK ---
 elif menu == "📝 Input Data KK":
@@ -232,19 +292,42 @@ elif menu == "📝 Input Data KK":
 # --- MENU 3: LAPOR KONDISI ---
 elif menu == "📡 Lapor Kondisi":
     st.title("📡 Laporan Lapangan")
-    with st.form("form_lap", clear_on_submit=True):
-        kec = st.selectbox("Lokasi", ["Martapura", "Martapura Barat", "Martapura Timur", "Sungai Tabuk"])
-        tinggi = st.slider("Tinggi Air (cm)", 0, 300, 50)
-        keb = st.multiselect("Kebutuhan Mendesak", ["Evakuasi", "Logistik", "Medis"])
-        
-        if st.form_submit_button("Kirim Laporan & Notifikasi WA"):
-            df_l = load_laporan()
-            stat = "Bahaya" if tinggi > 150 else "Waspada"
-            new_l = pd.DataFrame([{'Waktu': datetime.now().strftime("%H:%M"), 'Kecamatan': kec, 'Level Air (cm)': tinggi, 'Status': stat, 'Kebutuhan': ", ".join(keb)}])
-            pd.concat([df_l, new_l], ignore_index=True).to_csv(NAMA_FILE_LAPORAN, index=False)
-            
-            kirim_wa(kec, tinggi, ", ".join(keb))
-            st.success("✅ Laporan Terkirim & Notifikasi WA Terkirim!")
+
+    tab1, tab2 = st.tabs(["📝 Input Laporan", "📊 Riwayat"])
+
+    # ================= TAB INPUT =================
+    with tab1:
+        with st.form("form_lap", clear_on_submit=True):
+
+            kec = st.selectbox("Lokasi", ["Martapura", "Martapura Barat"])
+            tinggi = st.slider("Tinggi Air (cm)", 0, 300, 50)
+            keb = st.multiselect("Kebutuhan Mendesak", ["Evakuasi", "Logistik", "Medis"])
+
+            # ✅ UPLOAD FOTO — INDENT HARUS SEJAJAR INPUT LAIN
+            foto_path = None
+            foto = st.file_uploader(
+                "📸 Unggah Foto Lokasi (Opsional)",
+                type=["jpg", "jpeg", "png"]
+            )
+
+            if foto:
+                os.makedirs("uploads", exist_ok=True)
+                foto_path = os.path.join(
+                    "uploads",
+                    f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{foto.name}"
+                )
+                with open(foto_path, "wb") as f:
+                    f.write(foto.getbuffer())
+
+                st.image(
+                    foto,
+                    caption="Preview Foto Lokasi",
+                    use_container_width=True
+                )
+
+            # ✅ TOMBOL SUBMIT PALING BAWAH
+            if st.form_submit_button("Kirim Laporan"):
+                st.success("Form terkirim")
 
 # --- MENU 4: LOGISTIK (PASTIKAN STRUKTUR INI BENAR) ---
 elif menu == "📦 Logistik":
@@ -329,6 +412,4 @@ elif menu == "📈 Analisis":
 
     else:
         # Tampilan jika file CSV kosong atau tidak ditemukan
-
         st.warning("⚠️ Database warga masih kosong. Silakan isi data di menu 'Input Data KK' terlebih dahulu.")
-
