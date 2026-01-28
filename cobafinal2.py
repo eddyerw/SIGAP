@@ -188,62 +188,57 @@ with st.sidebar:
     st.info("Penyimpanan: **Lokal (CSV)** Aktif")
 
 # --- MENU 1: DASHBOARD ---
-# --- MENU 1: DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Dashboard Situasi Banjir Kabupaten Banjar")
-
+    
+    # Memuat Data
     df_kk = load_data()
     df_lap = load_laporan()
-
-    # ===== METRIK UTAMA =====
-    st.subheader("📌 Ringkasan Cepat")
-    m1, m2, m3, m4 = st.columns(4)
-
+    
+    # ===== PERHITUNGAN DATA UTAMA =====
     total_kk = len(df_kk)
     total_jiwa = df_kk['Jumlah Anggota'].sum() if not df_kk.empty else 0
     max_air = df_lap['Level Air (cm)'].max() if not df_lap.empty else 0
 
+    # Logika Status Wilayah (Dinamis)
     status_wilayah = (
-        "🔴 Bahaya" if max_air > 150 else
-        "🟠 Waspada" if max_air > 50 else
+        "🔴 Bahaya" if max_air > 150 else 
+        "🟠 Waspada" if max_air > 50 else 
         "🟢 Aman"
     )
 
-    m1.metric("KK Terdampak", total_kk)
-    m2.metric("Total Jiwa", int(total_jiwa))
+    # ===== 1. RINGKASAN METRIK UTAMA =====
+    st.subheader("📌 Ringkasan Cepat")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("KK Terdampak", f"{total_kk}", "Keluarga")
+    m2.metric("Total Jiwa", int(total_jiwa), "Orang")
     m3.metric("Level Air Tertinggi", f"{max_air} cm")
     m4.metric("Status Wilayah", status_wilayah)
 
     st.divider()
 
-    # ===== WIDGET CUACA =====
+    # ===== 2. KONDISI CUACA TERKINI =====
     st.subheader("🌦️ Kondisi Cuaca Terkini")
-
     weather = get_weather_data()
 
     if weather:
         w1, w2, w3 = st.columns(3)
-
         w1.metric("🌡️ Suhu", f"{weather['temp']} °C")
         w2.metric("☁️ Cuaca", weather['desc'].capitalize())
         w3.metric("🌧️ Hujan", f"{weather['rain']} mm/jam")
-
     else:
         st.info("Data cuaca tidak tersedia saat ini.")
-    # ===== AUTO WARNING SYSTEM =====
-    st.subheader("🚨 Peringatan Dini Otomatis")
 
+    # ===== 3. AUTO WARNING SYSTEM (EWS) =====
+    st.subheader("🚨 Peringatan Dini Otomatis")
     warning_list = []
 
-    # RULE 1: Tinggi Air
     if max_air > 150:
         warning_list.append("🔴 Tinggi air kritis (>150 cm)")
-
-    # RULE 2: Curah Hujan
+    
     if weather and weather['rain'] > 10:
         warning_list.append("🌧️ Curah hujan tinggi (>10 mm/jam)")
 
-    # RULE 3: Kombinasi
     if weather and weather['rain'] > 10 and max_air > 100:
         warning_list.append("⚠️ Risiko banjir meluas dalam beberapa jam ke depan")
 
@@ -253,6 +248,27 @@ if menu == "📊 Dashboard":
     else:
         st.success("🟢 Tidak ada peringatan kritis saat ini")
 
+    st.divider()
+
+    # ===== 4. VISUALISASI DATA LAPANGAN =====
+    st.subheader("📊 Analisis Distribusi")
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.write("📍 **Sebaran Kecamatan**")
+        if not df_kk.empty:
+            # Menggunakan bar chart untuk visualisasi yang lebih intuitif
+            st.bar_chart(df_kk['Kecamatan'].value_counts())
+        else:
+            st.write("Belum ada data kecamatan.")
+
+    with c2:
+        st.write("🏠 **Kondisi Rumah**")
+        if not df_kk.empty:
+            # Menampilkan data status rumah dalam bentuk tabel/list
+            st.write(df_kk['Status Rumah'].value_counts())
+        else:
+            st.write("Belum ada data kondisi rumah.")
 
 # --- MENU 2: INPUT DATA KK ---
 elif menu == "📝 Input Data KK":
