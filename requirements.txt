@@ -1,6 +1,10 @@
 streamlit
 pandas
+sqlite3
 requests
+io
+os
 xlsxwriter
 reportlab
+
 
