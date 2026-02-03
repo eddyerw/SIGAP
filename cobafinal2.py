@@ -8,16 +8,60 @@ from datetime import datetime
 
 # Library untuk Ekspor & PDF
 import xlsxwriter
-from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
+import tempfile
+
+def generate_pdf_laporan_analisis(
+    jumlah_ruta, jumlah_keluarga, jumlah_jiwa,
+    kerugian_tani, kerugian_rumah, total_kerugian
+):
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    doc = SimpleDocTemplate(tmp.name, pagesize=A4)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph(
+        "<b>LAPORAN ANALISIS DAMPAK & KERUGIAN</b>",
+        styles["Title"]
+    ))
+    elements.append(Paragraph(
+        f"Tanggal Cetak: {datetime.now().strftime('%d-%m-%Y %H:%M')}",
+        styles["Normal"]
+    ))
+    elements.append(Paragraph("<br/>", styles["Normal"]))
+
+    data = [
+        ["Indikator", "Nilai"],
+        ["Ruta Terdampak", jumlah_ruta],
+        ["Keluarga Terdampak", jumlah_keluarga],
+        ["Total Jiwa", jumlah_jiwa],
+        ["Kerugian Pertanian", f"Rp {kerugian_tani:,.0f}"],
+        ["Kerugian Rumah", f"Rp {kerugian_rumah:,.0f}"],
+        ["TOTAL KERUGIAN", f"Rp {total_kerugian:,.0f}"],
+    ]
+
+    table = Table(data, colWidths=[260, 200])
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 1, colors.black),
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+        ("FONT", (0,0), (-1,0), "Helvetica-Bold"),
+        ("FONT", (0,-1), (-1,-1), "Helvetica-Bold"),
+        ("BACKGROUND", (0,-1), (-1,-1), colors.whitesmoke),
+    ]))
+
+    elements.append(table)
+    doc.build(elements)
+    return tmp.name
+
 
 # --- 1. INISIALISASI DATABASE & MIGRASI ---
 DB_NAME = "sigap_banjar.db"
 
 def get_connection():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    return sqlite3.connect("sigap_banjar.db", check_same_thread=False)
 
 def column_exists(conn, table_name, column_name):
     cur = conn.execute(f"PRAGMA table_info({table_name})")
@@ -34,6 +78,27 @@ def migrate_db():
         conn.execute("ALTER TABLE laporan ADD COLUMN status_verifikasi TEXT DEFAULT 'Pending'")
     conn.commit()
     conn.close()
+
+def migrate_table_pertanian():
+    conn = get_connection()
+    c = conn.cursor()
+
+    # Ambil kolom yang sudah ada
+    c.execute("PRAGMA table_info(pertanian)")
+    existing_columns = [col[1] for col in c.fetchall()]
+
+    if "latitude" not in existing_columns:
+        c.execute("ALTER TABLE pertanian ADD COLUMN latitude REAL")
+
+    if "longitude" not in existing_columns:
+        c.execute("ALTER TABLE pertanian ADD COLUMN longitude REAL")
+
+    if "foto_lahan" not in existing_columns:
+        c.execute("ALTER TABLE pertanian ADD COLUMN foto_lahan TEXT")
+
+    conn.commit()
+    conn.close()
+
 
 def init_db():
     conn = get_connection()
@@ -52,18 +117,60 @@ def init_db():
                     status_verifikasi TEXT DEFAULT 'Pending')''')
     # Tabel Pertanian
     c.execute('''CREATE TABLE IF NOT EXISTS pertanian (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    nik_pemilik TEXT, kecamatan TEXT, luas_lahan REAL, 
-                    usia_padi INTEGER, estimasi_kerugian REAL, waktu_input DATETIME)''')
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   nik_pemilik TEXT, kecamatan TEXT, luas_lahan REAL,
+                   usia_padi INTEGER, estimasi_kerugian REAL, foto_lahan TEXT,
+                   latitude REAL, longitude REAL, waktu_input DATETIME)''')
     # Tabel Inventori
     c.execute('CREATE TABLE IF NOT EXISTS stok_barang (nama_barang TEXT PRIMARY KEY, jumlah_stok REAL, satuan TEXT)')
     c.execute("INSERT OR IGNORE INTO stok_barang VALUES ('Beras', 0, 'Kg'), ('Mie Instan', 0, 'Dus'), ('Obat-obatan', 0, 'Paket')")
-    
+    # === TABEL KK (KEPALA KELUARGA) ===
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS kk (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nik TEXT UNIQUE,
+        nama_kk TEXT,
+        kecamatan TEXT,
+        jumlah_anggota INTEGER,
+        status_rumah TEXT,
+        kelompok_rentan TEXT,
+        waktu_input DATETIME
+    )
+    """)
+    # =========================
+    # TABEL RUMAH
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS rumah (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nik_pemilik TEXT,
+        status_rumah TEXT,
+        estimasi_kerugian REAL DEFAULT 0,
+        waktu TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+       
+  # ===== AUTO MIGRASI KOLOM (AMAN) =====
+    existing_columns = [
+        col[1] for col in c.execute("PRAGMA table_info(pertanian)").fetchall()
+    ]
+
+    def add_column(name, tipe):
+        if name not in existing_columns:
+            c.execute(f"ALTER TABLE pertanian ADD COLUMN {name} {tipe}")
+
+    add_column("foto_lahan", "TEXT")
+    add_column("produksi", "REAL")
+    add_column("catatan", "TEXT")
+
     conn.commit()
     conn.close()
 
 init_db()
 migrate_db()
+migrate_table_pertanian()
+
 
 # --- 2. FUNGSI HELPER (WA, WEATHER, DLL) ---
 def kirim_wa_fonnte(kec, tinggi, keb):
@@ -74,13 +181,53 @@ def kirim_wa_fonnte(kec, tinggi, keb):
     try: requests.post(url, headers={"Authorization": token}, data={"target": target, "message": pesan})
     except: pass
 
-def get_weather_data(city_name="Martapura"):
-    api_key = "a89f4bc4d2e3f0d0a3e204161b289c5c" 
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name}&appid={api_key}&units=metric&lang=id"
+import requests
+
+def get_weather():
+    API_KEY = "a89f4bc4d2e3f0d0a3e204161b289c5c"
+    CITY = "Martapura"
+    URL = f"https://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={"a89f4bc4d2e3f0d0a3e204161b289c5c"}&units=metric"
+
     try:
-        res = requests.get(url).json()
-        return {"temp": res['main']['temp'], "desc": res['weather'][0]['description']}
-    except: return None
+        response = requests.get(URL, timeout=5)
+        data = response.json()
+
+        if response.status_code != 200:
+            return None
+
+        weather = {
+            "suhu": data["main"]["temp"],
+            "cuaca": data["weather"][0]["description"],
+            "kelembapan": data["main"]["humidity"]
+        }
+        return weather
+
+    except Exception as e:
+        print("Gagal ambil cuaca:", e)
+        return None
+
+# =============================
+# === HITUNG KERUGIAN TANI ====
+# =============================
+def hitung_kerugian_tani(luas_lahan, usia_padi):
+    """
+    luas_lahan : luas sawah (hektar)
+    usia_padi  : umur padi (hari)
+    """
+
+    # Estimasi biaya per hektar (rupiah)
+    biaya_per_ha = 15000000  # 15 juta / ha (bibit, pupuk, tenaga)
+
+    # Faktor kerugian berdasarkan usia padi
+    if usia_padi < 30:
+        faktor = 0.3
+    elif usia_padi < 60:
+        faktor = 0.6
+    else:
+        faktor = 1.0
+
+    kerugian = luas_lahan * biaya_per_ha * faktor
+    return int(kerugian)
 
 # --- 3. UI CONFIG & LOGIN ---
 st.set_page_config(page_title="SIGAP BANJAR", page_icon="🌊", layout="wide")
@@ -102,88 +249,183 @@ with st.sidebar:
             st.session_state.logged_in = False
             st.rerun()
 
-    menu_list = ["📊 Dashboard", "📡 Lapor Kondisi"]
+    menu_list = ["📊 Dashboard", "📡 Lapor Kondisi", "✅ Verifikasi Laporan" ]
     if st.session_state.logged_in:
-        menu_list += ["📝 Input Data KK", "🌾 Sektor Pertanian", "📦 Logistik & Stok", "✅ Verifikasi Laporan", "📈 Analisis"]
+        menu_list += ["📝 Input Data KK", "🌾 Sektor Pertanian", "📦 Logistik & Stok", "✅ Verifikasi Laporan", "📉 Analisis Laporan Kerugian"]
     menu = st.radio("Navigasi", menu_list)
 
 # --- 4. LOGIKA MENU ---
 
-# --- DASHBOARD (HANYA DATA TERVERIFIKASI) ---
+# =============================
+# ===== MENU NAVIGASI =========
+# =============================
+#menu = st.sidebar.selectbox(
+ #   "📌 Menu",
+  #  [
+   #     "📊 Dashboard",
+    #    "📡 Lapor Kondisi",
+     #   "✅ Verifikasi Laporan",
+    #]
+#)
+
+# =============================
+# ===== DASHBOARD =============
+# =============================
 if menu == "📊 Dashboard":
     st.title("📊 Dashboard Situasi Terverifikasi")
+
     conn = get_connection()
-    # Hanya menampilkan yang sudah diverifikasi admin
-    df_lap = pd.read_sql_query("SELECT * FROM laporan WHERE status_verifikasi = 'Terverifikasi' ORDER BY waktu DESC", conn)
+
+    df_lap = pd.read_sql_query("""
+        SELECT * FROM laporan 
+        WHERE status_verifikasi = 'Terverifikasi'
+        ORDER BY waktu DESC
+    """, conn)
+
+    df_kk = pd.read_sql_query("SELECT * FROM kk", conn)
     conn.close()
-    
+
+    # ===== NORMALISASI KOLOM =====
+    df_kk.columns = df_kk.columns.str.strip().str.lower()
+
+    # ===== METRIK UTAMA =====
     if not df_lap.empty:
         c1, c2 = st.columns(2)
-        c1.metric("Titik Banjir Terverifikasi", len(df_lap))
-        c2.metric("Ketinggian Maksimal", f"{df_lap['tinggi_air'].max()} cm")
-        st.dataframe(df_lap[['waktu', 'kecamatan', 'tinggi_air', 'kebutuhan']], use_container_width=True)
-    else:
-        st.info("Belum ada laporan warga yang terverifikasi untuk ditampilkan.")
+        c1.metric("📍 Titik Banjir", len(df_lap))
+        c2.metric("📏 Air Maksimum", f"{df_lap['tinggi_air'].max()} cm")
 
-# --- LAPOR KONDISI (STATUS DEFAULT: PENDING) ---
+        st.dataframe(
+            df_lap[['waktu', 'kecamatan', 'tinggi_air', 'kebutuhan']],
+            use_container_width=True
+        )
+    else:
+        st.info("Belum ada laporan terverifikasi.")
+
+    total_kk = len(df_kk)
+    total_jiwa = df_kk['jumlah_anggota'].sum() if not df_kk.empty else 0
+    max_air = df_lap['tinggi_air'].max() if not df_lap.empty else 0
+
+    status_wilayah = (
+        "🔴 Bahaya" if max_air > 150 else
+        "🟠 Waspada" if max_air > 50 else
+        "🟢 Aman"
+    )
+
+    st.subheader("📌 Ringkasan Cepat")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("KK Terdampak", total_kk)
+    m2.metric("Total Jiwa", total_jiwa)
+    m3.metric("Level Air Tertinggi", f"{max_air} cm")
+    m4.metric("Status Wilayah", status_wilayah)
+
+    st.divider()
+
+    # ===== VISUALISASI =====
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.write("📍 **Sebaran Kecamatan**")
+        if not df_kk.empty:
+            st.bar_chart(df_kk['kecamatan'].value_counts())
+
+    with c2:
+        st.write("🏠 **Kondisi Rumah**")
+        if not df_kk.empty:
+            st.write(df_kk['status_rumah'].value_counts())
+
+# =============================
+# ===== LAPOR KONDISI ========
+# =============================
 elif menu == "📡 Lapor Kondisi":
+
     st.title("📡 Laporan Cepat Masyarakat")
-    st.info("Laporan Anda akan melalui proses verifikasi admin sebelum dipublikasikan.")
+    st.info("Laporan akan diverifikasi admin sebelum ditampilkan.")
+
     with st.form("lapor", clear_on_submit=True):
-        kec = st.selectbox("Kecamatan", ["Martapura", "Martapura Barat", "Martapura Timur", "Sungai Tabuk"])
+        kec = st.selectbox(
+            "Kecamatan",
+            ["Martapura", "Martapura Barat", "Martapura Timur", "Sungai Tabuk"]
+        )
         tinggi = st.slider("Tinggi Air (cm)", 0, 300, 50)
         keb = st.multiselect("Kebutuhan", ["Evakuasi", "Logistik", "Medis"])
-        foto = st.file_uploader("📸 Unggah Foto Lokasi", type=["jpg", "png", "jpeg"])
-        
-        if st.form_submit_button("Kirim Laporan"):
-            foto_path = None
-            if foto:
-                os.makedirs("uploads", exist_ok=True)
-                foto_path = f"uploads/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{foto.name}"
-                with open(foto_path, "wb") as f: f.write(foto.getbuffer())
+        foto = st.file_uploader("📸 Unggah Foto", ["jpg", "png", "jpeg"])
+        submit = st.form_submit_button("Kirim Laporan")
 
-            conn = get_connection()
-            conn.execute("""INSERT INTO laporan (kecamatan, tinggi_air, status, kebutuhan, foto_path, waktu, status_verifikasi) 
-                            VALUES (?,?,?,?,?,?,?)""", 
-                         (kec, tinggi, "Waspada", ", ".join(keb), foto_path, datetime.now(), 'Pending'))
-            conn.commit(); conn.close()
-            kirim_wa_fonnte(kec, tinggi, ", ".join(keb))
-            st.success("✅ Laporan terkirim! Status: Pending (Menunggu Verifikasi Admin).")
+    if submit:
+        foto_path = None
+        if foto:
+            os.makedirs("uploads", exist_ok=True)
+            foto_path = os.path.join(
+                "uploads",
+                f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{foto.name}"
+            )
+            with open(foto_path, "wb") as f:
+                f.write(foto.getbuffer())
 
-# --- VERIFIKASI LAPORAN (KHUSUS ADMIN) ---
+        conn = get_connection()
+        conn.execute(
+            """
+            INSERT INTO laporan
+            (kecamatan, tinggi_air, status, kebutuhan, foto_path, waktu, status_verifikasi)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (kec, tinggi, "Waspada", ", ".join(keb), foto_path, datetime.now(), "Pending"),
+        )
+        conn.commit()
+        conn.close()
+
+        kirim_wa_fonnte(kec, tinggi, ", ".join(keb))
+        st.success("✅ Laporan terkirim (Pending).")
+
+
+# =============================
+# ===== VERIFIKASI ===========
+# =============================
 elif menu == "✅ Verifikasi Laporan":
     st.title("✅ Moderasi Laporan Masuk")
+
     conn = get_connection()
-    # Ambil semua kecuali yang sudah selesai/dihapus
-    df_all = pd.read_sql_query("SELECT * FROM laporan WHERE status_verifikasi != 'Selesai' ORDER BY waktu DESC", conn)
-    
+    df_all = pd.read_sql_query(
+        "SELECT * FROM laporan WHERE status_verifikasi != 'Selesai' ORDER BY waktu DESC",
+        conn,
+    )
+
     if not df_all.empty:
         for _, row in df_all.iterrows():
-            with st.expander(f"📍 {row['kecamatan']} | Status: {row['status_verifikasi']} | {row['waktu']}"):
-                col_text, col_img = st.columns([2, 1])
-                with col_text:
-                    st.write(f"**Tinggi Air:** {row['tinggi_air']} cm")
-                    st.write(f"**Kebutuhan:** {row['kebutuhan']}")
-                with col_img:
-                    if row['foto_path'] and os.path.exists(row['foto_path']):
-                        st.image(row['foto_path'], use_container_width=True)
-                    else: st.caption("Tidak ada foto.")
-                
-                # Tombol Moderasi
-                b1, b2, b3 = st.columns(3)
-                if b1.button(f"Verifikasi #{row['id']}"):
-                    conn.execute("UPDATE laporan SET status_verifikasi = 'Terverifikasi' WHERE id = ?", (row['id'],))
-                    conn.commit(); st.rerun()
-                if b2.button(f"Selesaikan #{row['id']}"):
-                    conn.execute("UPDATE laporan SET status_verifikasi = 'Selesai' WHERE id = ?", (row['id'],))
-                    conn.commit(); st.rerun()
-                if b3.button(f"Hapus Fiktif #{row['id']}", help="Hapus laporan palsu"):
-                    conn.execute("DELETE FROM laporan WHERE id = ?", (row['id'],))
-                    conn.commit(); st.rerun()
+            with st.expander(f"📍 {row['kecamatan']} | {row['status_verifikasi']}"):
+                st.write(f"**Tinggi Air:** {row['tinggi_air']} cm")
+                st.write(f"**Kebutuhan:** {row['kebutuhan']}")
+
+                if row['foto_path'] and os.path.exists(row['foto_path']):
+                    st.image(row['foto_path'], use_container_width=True)
+
+                c1, c2, c3 = st.columns(3)
+
+                if c1.button("✔️ Verifikasi", key=f"v{row['id']}"):
+                    conn.execute(
+                        "UPDATE laporan SET status_verifikasi='Terverifikasi' WHERE id=?",
+                        (row['id'],)
+                    )
+                    conn.commit()
+                    st.rerun()
+
+                if c2.button("✅ Selesai", key=f"s{row['id']}"):
+                    conn.execute(
+                        "UPDATE laporan SET status_verifikasi='Selesai' WHERE id=?",
+                        (row['id'],)
+                    )
+                    conn.commit()
+                    st.rerun()
+
+                if c3.button("🗑️ Hapus", key=f"h{row['id']}"):
+                    conn.execute("DELETE FROM laporan WHERE id=?", (row['id'],))
+                    conn.commit()
+                    st.rerun()
     else:
-        st.info("Tidak ada laporan baru untuk diverifikasi.")
+        st.info("Tidak ada laporan masuk.")
+
     conn.close()
-    
+
 # --- INPUT DATA KK (ADMIN) ---
 elif menu == "📝 Input Data KK":
     st.title("📝 Registrasi Data Keluarga")
@@ -198,8 +440,7 @@ elif menu == "📝 Input Data KK":
         if st.form_submit_button("Simpan Data"):
             conn = get_connection()
             try:
-                conn.execute("INSERT INTO warga (nik, nama_kk, kecamatan, jml_anggota, status_rumah, kelompok_rentan, waktu_input) VALUES (?,?,?,?,?,?,?)",
-                             (nik, nama, kec_w, jml_a, kondisi, rentan, datetime.now()))
+                conn.execute("""INSERT INTO kk (nik, nama_kk, kecamatan,jumlah_anggota, status_rumah, kelompok_rentan, waktu_input) VALUES (?,?,?,?,?,?,?)""", (nik, nama, kec_w,jml_a, kondisi,", ".join(rentan), datetime.now()))
                 conn.commit()
                 st.success("✅ Data berhasil masuk ke Database SQL.")
             except: st.error("❌ NIK sudah terdaftar!")
@@ -208,20 +449,80 @@ elif menu == "📝 Input Data KK":
 # --- SEKTOR PERTANIAN (ADMIN) ---
 elif menu == "🌾 Sektor Pertanian":
     st.title("🌾 Analisis Dampak Pertanian")
+
     with st.form("form_tani", clear_on_submit=True):
         nik_p = st.text_input("NIK Pemilik Lahan")
-        kec_t = st.selectbox("Lokasi Sawah", ["Martapura", "Martapura Barat", "Martapura Timur", "Sungai Tabuk"])
+
+        kec_t = st.selectbox(
+            "Lokasi Sawah",
+            ["Martapura", "Martapura Barat", "Martapura Timur", "Sungai Tabuk"]
+        )
+
         luas_l = st.number_input("Luas Lahan (Ha)", min_value=0.1)
         usia_p = st.number_input("Usia Padi (Hari)", min_value=1)
-        
-        if st.form_submit_button("Simpan Data Pertanian"):
+
+        st.markdown("### 📍 Lokasi GPS Sawah")
+        col1, col2 = st.columns(2)
+        with col1:
+            lat = st.number_input(
+                "Latitude",
+                value=-3.320000,
+                format="%.6f"
+            )
+        with col2:
+            lon = st.number_input(
+                "Longitude",
+                value=114.590000,
+                format="%.6f"
+            )
+
+        foto = st.file_uploader(
+            "📷 Upload Foto Lahan Pertanian",
+            type=["jpg", "jpeg", "png"]
+        )
+
+        submit = st.form_submit_button("💾 Simpan Data Pertanian")
+
+    if submit:
+        if not nik_p:
+            st.warning("⚠️ NIK Pemilik Lahan wajib diisi")
+        else:
             rugi = hitung_kerugian_tani(luas_l, usia_p)
+
+            # === SIMPAN FOTO ===
+            foto_path = None
+            if foto:
+                os.makedirs("foto_pertanian", exist_ok=True)
+                foto_path = os.path.join(
+                    "foto_pertanian",
+                    f"{nik_p}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                )
+                with open(foto_path, "wb") as f:
+                    f.write(foto.getbuffer())
+
+            # === SIMPAN DB ===
             conn = get_connection()
-            conn.execute("INSERT INTO pertanian (nik_pemilik, kecamatan, luas_lahan, usia_padi, estimasi_kerugian, waktu_input) VALUES (?,?,?,?,?,?)",
-                         (nik_p, kec_t, luas_l, usia_p, rugi, datetime.now()))
+            conn.execute(
+                """
+                INSERT INTO pertanian
+                (nik_pemilik, kecamatan, luas_lahan, usia_padi,
+                 estimasi_kerugian, foto_lahan,
+                 latitude, longitude, waktu_input)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    nik_p, kec_t, luas_l, usia_p,
+                    rugi, foto_path,
+                    lat, lon, datetime.now()
+                )
+            )
             conn.commit()
             conn.close()
-            st.success(f"✅ Data Tani Tersimpan. Estimasi Kerugian: Rp {rugi:,.0f}")
+
+            st.success(f"✅ Data Tani + GPS tersimpan | Kerugian: Rp {rugi:,.0f}")
+
+            # === TAMPILKAN PETA ===
+            st.map(pd.DataFrame({"lat": [lat], "lon": [lon]}))
 
 # --- MANAJEMEN LOGISTIK (STOK IN/OUT) ---
 elif menu == "📦 Logistik & Stok":
@@ -256,21 +557,149 @@ elif menu == "📦 Logistik & Stok":
                 conn.close()
 
 
-# --- MENU ANALISIS & EKSPOR ---
-elif menu == "📈 Analisis":
-    st.title("📈 Laporan Akhir & Ekspor Data")
+# ======================================================
+# 📉 ANALISIS LAPORAN KERUGIAN (GABUNGAN)
+# ======================================================
+elif menu == "📉 Analisis Laporan Kerugian":
+    st.title("📉 Analisis Laporan Kerugian")
+
     conn = get_connection()
-    df_t = pd.read_sql_query("SELECT * FROM pertanian", conn)
+
+    # ======================
+    # AMBIL DATA (AMAN)
+    # ======================
+    try:
+        df_tani = pd.read_sql_query("""
+            SELECT nik_pemilik, kecamatan, luas_lahan,
+                   estimasi_kerugian
+            FROM pertanian
+        """, conn)
+    except Exception:
+        df_tani = pd.DataFrame(
+            columns=["nik_pemilik", "kecamatan", "luas_lahan", "estimasi_kerugian"]
+        )
+
+    try:
+        df_rumah = pd.read_sql_query("""
+            SELECT nik_pemilik, estimasi_kerugian
+            FROM rumah
+        """, conn)
+    except Exception:
+        df_rumah = pd.DataFrame(
+            columns=["nik_pemilik", "estimasi_kerugian"]
+        )
+
+    try:
+        df_kk = pd.read_sql_query("""
+            SELECT nik_kk, jumlah_anggota
+            FROM kk
+        """, conn)
+    except Exception:
+        df_kk = pd.DataFrame(
+            columns=["nik_kk", "jumlah_anggota"]
+        )
+
     conn.close()
-    
-    if not df_t.empty:
-        st.subheader("Data Kerugian Sektor Pertanian")
-        st.dataframe(df_t)
-        
-        # Ekspor Excel
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_t.to_excel(writer, index=False, sheet_name='Laporan_Tani')
-        st.download_button("📥 Ekspor ke Excel (.xlsx)", output.getvalue(), "Laporan_Tani_Banjar.xlsx")
+
+    # ======================
+    # VALIDASI DATA
+    # ======================
+    if df_tani.empty and df_rumah.empty:
+        st.info("📭 Belum ada data kerugian yang tercatat.")
     else:
-        st.info("Belum ada data untuk dianalisis.")
+        # ======================
+        # HITUNG DAMPAK
+        # ======================
+        nik_terdampak = set()
+
+        if not df_tani.empty:
+            nik_terdampak.update(
+                df_tani["nik_pemilik"].dropna().astype(str).unique()
+            )
+
+        if not df_rumah.empty:
+            nik_terdampak.update(
+                df_rumah["nik_pemilik"].dropna().astype(str).unique()
+            )
+
+        jumlah_ruta = len(nik_terdampak)
+
+        if not df_kk.empty:
+            df_kk_terdampak = df_kk[df_kk["nik_kk"].astype(str).isin(nik_terdampak)]
+            jumlah_keluarga = len(df_kk_terdampak)
+            jumlah_jiwa = int(df_kk_terdampak["jumlah_anggota"].sum())
+        else:
+            jumlah_keluarga = 0
+            jumlah_jiwa = 0
+
+        kerugian_tani = (
+            df_tani["estimasi_kerugian"].sum()
+            if not df_tani.empty else 0
+        )
+
+        kerugian_rumah = (
+            df_rumah["estimasi_kerugian"].sum()
+            if not df_rumah.empty else 0
+        )
+
+        total_kerugian = kerugian_tani + kerugian_rumah
+
+        # ======================
+        # RINGKASAN
+        # ======================
+        st.subheader("📌 Ringkasan Dampak")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🏠 Ruta Terdampak", jumlah_ruta)
+        c2.metric("👨‍👩‍👧 Keluarga", jumlah_keluarga)
+        c3.metric("🧍 Total Jiwa", jumlah_jiwa)
+        c4.metric("💰 Total Kerugian", f"Rp {total_kerugian:,.0f}")
+
+        st.divider()
+
+        # ======================
+        # DETAIL KERUGIAN
+        # ======================
+        col1, col2 = st.columns(2)
+        col1.metric("🌾 Kerugian Pertanian", f"Rp {kerugian_tani:,.0f}")
+        col2.metric("🏚️ Kerugian Rumah", f"Rp {kerugian_rumah:,.0f}")
+
+        st.divider()
+
+        # ======================
+        # TABEL & GRAFIK PERTANIAN
+        # ======================
+        if not df_tani.empty:
+            st.subheader("🌾 Detail Kerugian Pertanian")
+            st.dataframe(df_tani, use_container_width=True)
+
+            chart = (
+                df_tani
+                .groupby("kecamatan")["estimasi_kerugian"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(chart)
+
+        st.divider()
+
+        # ======================
+        # DOWNLOAD PDF
+        # ======================
+        if st.button("📥 Download Laporan PDF"):
+            pdf_path = generate_pdf_laporan_analisis(
+                jumlah_ruta,
+                jumlah_keluarga,
+                jumlah_jiwa,
+                kerugian_tani,
+                kerugian_rumah,
+                total_kerugian
+            )
+
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    "⬇️ Unduh PDF",
+                    f,
+                    file_name="laporan_analisis_kerugian.pdf",
+                    mime="application/pdf"
+                )
