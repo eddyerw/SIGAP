@@ -264,7 +264,6 @@ with st.sidebar:
   #  [
    #     "📊 Dashboard",
     #    "📡 Lapor Kondisi",
-     #   "✅ Verifikasi Laporan",
     #]
 #)
 
@@ -703,3 +702,4 @@ elif menu == "📉 Analisis Laporan Kerugian":
                     file_name="laporan_analisis_kerugian.pdf",
                     mime="application/pdf"
                 )
+
