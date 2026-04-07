@@ -230,12 +230,12 @@ def hitung_kerugian_tani(luas_lahan, usia_padi):
     return int(kerugian)
 
 # --- 3. UI CONFIG & LOGIN ---
-st.set_page_config(page_title="SIGAP BANJAR", page_icon="🌊", layout="wide")
+st.set_page_config(page_title="GARDA BANJAR", page_icon="🌊", layout="wide")
 
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 
 with st.sidebar:
-    st.title("🌊 SIGAP BANJAR")
+    st.title("🌊 GARDA BANJAR")
     if not st.session_state.logged_in:
         user = st.text_input("Admin User")
         pw = st.text_input("Password", type="password")
