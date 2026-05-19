@@ -249,7 +249,7 @@ with st.sidebar:
             st.session_state.logged_in = False
             st.rerun()
 
-    menu_list = ["📊 Dashboard", "📡 Lapor Kondisi", "✅ Verifikasi Laporan" ]
+    menu_list = ["📊 Dashboard", "📡 Lapor Kondisi" ]
     if st.session_state.logged_in:
         menu_list += ["📝 Input Data KK", "🌾 Sektor Pertanian", "📦 Logistik & Stok", "✅ Verifikasi Laporan", "📉 Analisis Laporan Kerugian"]
     menu = st.radio("Navigasi", menu_list)
